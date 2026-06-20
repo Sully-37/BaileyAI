@@ -31,6 +31,6 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
 
-          docker build -t $ECR_REPOSITORY:latest .
+          docker build -f docker/Dockerfile -t $ECR_REPOSITORY:latest .
           docker tag $ECR_REPOSITORY:latest $IMAGE_URI
           docker push $IMAGE_URI
