@@ -1,19 +1,53 @@
-<div class="controls">
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BaileyAI</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
 
-    <button id="loadModels">
-        Load Models
-    </button>
+    <div id="termsModal" class="modal">
+        <div class="modal-content">
+            <h2>Terms & Agreement</h2>
 
-    <button id="connect">
-        Connect
-    </button>
+            <p>
+                By continuing, you consent to microphone access and realtime
+                AI-generated voice interaction for testing purposes.
+            </p>
 
-    <button id="start">
-        🎤 Start Conversation
-    </button>
+            <button id="acceptTerms">Accept & Continue</button>
+        </div>
+    </div>
 
-    <button id="stop">
-        Stop
-    </button>
+    <div class="container hidden" id="appContainer">
+        <h1>BaileyAI Voice Demo</h1>
 
-</div>
+        <div class="controls">
+            <button id="missionTest">Mission Control Test</button>
+            <button id="loadModels">Load Models</button>
+            <button id="connect">Connect</button>
+            <button id="start">🎤 Start Conversation</button>
+            <button id="stop">Stop</button>
+        </div>
+
+        <p id="status">Idle</p>
+
+        <div class="panel">
+            <h3>Mission Control</h3>
+            <pre id="missionOutput"></pre>
+        </div>
+
+        <div class="panel">
+            <h3>You</h3>
+            <p id="transcript"></p>
+        </div>
+
+        <div class="panel">
+            <h3>Bailey</h3>
+            <p id="assistant"></p>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

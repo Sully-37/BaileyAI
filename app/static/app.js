@@ -1,14 +1,11 @@
 let ws;
-
-// Browser media recorder for microphone streaming.
 let mediaRecorder;
-
-// Active microphone stream.
 let stream;
 
 const statusEl = document.getElementById("status");
 const transcriptEl = document.getElementById("transcript");
 const assistantEl = document.getElementById("assistant");
+const missionOutputEl = document.getElementById("missionOutput");
 
 const modalEl = document.getElementById("termsModal");
 const appContainerEl = document.getElementById("appContainer");
@@ -18,6 +15,49 @@ const appContainerEl = document.getElementById("appContainer");
 document.getElementById("acceptTerms").onclick = () => {
     modalEl.style.display = "none";
     appContainerEl.classList.remove("hidden");
+};
+
+
+// Records a short browser mic sample and sends it to mission control.
+document.getElementById("missionTest").onclick = async () => {
+    statusEl.textContent = "Running mission control test...";
+    missionOutputEl.textContent = "";
+
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(micStream, { mimeType: "audio/webm" });
+
+    const chunks = [];
+
+    recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+            chunks.push(event.data);
+        }
+    };
+
+    recorder.onstop = async () => {
+        micStream.getTracks().forEach(track => track.stop());
+
+        const audioBlob = new Blob(chunks, { type: "audio/webm" });
+
+        const formData = new FormData();
+        formData.append("audio", audioBlob, "mission-test.webm");
+
+        const response = await fetch("/mission-control/test", {
+            method: "POST",
+            body: formData,
+        });
+
+        const data = await response.json();
+
+        missionOutputEl.textContent = JSON.stringify(data, null, 2);
+        statusEl.textContent = "Mission control test complete";
+    };
+
+    recorder.start();
+
+    setTimeout(() => {
+        recorder.stop();
+    }, 1500);
 };
 
 
@@ -55,6 +95,10 @@ document.getElementById("connect").onclick = async () => {
 
             if (msg.type === "assistant_text") {
                 assistantEl.textContent += " " + msg.text;
+            }
+
+            if (msg.type === "error") {
+                statusEl.textContent = msg.message;
             }
         } else {
             const blob = new Blob([event.data], { type: "audio/wav" });
