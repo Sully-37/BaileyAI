@@ -3,12 +3,17 @@ import tempfile
 
 from faster_whisper import WhisperModel
 
-from app.config import settings
+from app.config import (
+    CUDA_DEVICE,
+    STT_MODEL_NAME,
+    STT_COMPUTE_TYPE,
+    STT_LANGUAGE,
+)
 
 
 class STTService:
     """
-    Handles realtime speech-to-text inference using Faster-Whisper.
+    Handles speech-to-text inference using Faster-Whisper.
     """
 
     def __init__(self):
@@ -17,14 +22,14 @@ class STTService:
 
     async def load(self):
         """
-        Loads Whisper weights into GPU VRAM.
+        Loads Whisper weights into GPU memory.
         """
 
         def _load():
             return WhisperModel(
-                settings.STT_MODEL_NAME,
-                device=settings.CUDA_DEVICE,
-                compute_type=settings.STT_COMPUTE_TYPE,
+                STT_MODEL_NAME,
+                device=CUDA_DEVICE,
+                compute_type=STT_COMPUTE_TYPE,
             )
 
         self.model = await asyncio.to_thread(_load)
@@ -32,8 +37,11 @@ class STTService:
 
     async def transcribe_webm(self, chunks: list[bytes]) -> str:
         """
-        Converts streamed browser audio into text.
+        Converts streamed browser WebM audio into text.
         """
+
+        if not self.loaded or self.model is None:
+            raise RuntimeError("STT model is not loaded")
 
         audio_bytes = b"".join(chunks)
 
@@ -46,7 +54,7 @@ class STTService:
                     f.name,
                     beam_size=1,
                     vad_filter=True,
-                    language=settings.STT_LANGUAGE,
+                    language=STT_LANGUAGE,
                 )
 
                 return " ".join(seg.text.strip() for seg in segments)
