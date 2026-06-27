@@ -7,25 +7,38 @@ from transformers import (
     TextIteratorStreamer,
 )
 
-from app.config import settings
+from app.config import (
+    CUDA_DEVICE,
+    LLM_MODEL_NAME,
+    LLM_MAX_NEW_TOKENS,
+    LLM_TEMPERATURE,
+)
 
 
 class LLMService:
+    """
+    GPU resident conversational language model runtime.
+    """
+
     def __init__(self):
         self.model = None
         self.tokenizer = None
         self.loaded = False
 
     async def load(self):
+        """
+        Loads the quantized Qwen model into GPU memory.
+        """
+
         def _load():
             tokenizer = AutoTokenizer.from_pretrained(
-                settings.LLM_MODEL_NAME,
+                LLM_MODEL_NAME,
                 trust_remote_code=True,
             )
 
             model = AutoModelForCausalLM.from_pretrained(
-                settings.LLM_MODEL_NAME,
-                device_map="cuda",
+                LLM_MODEL_NAME,
+                device_map=CUDA_DEVICE,
                 torch_dtype="auto",
                 trust_remote_code=True,
             )
@@ -36,6 +49,10 @@ class LLMService:
         self.loaded = True
 
     async def stream_sentences(self, user_text: str):
+        """
+        Streams model output as sentence-sized chunks for TTS.
+        """
+
         messages = [
             {
                 "role": "system",
@@ -53,7 +70,10 @@ class LLMService:
             add_generation_prompt=True,
         )
 
-        inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+        ).to(CUDA_DEVICE)
 
         streamer = TextIteratorStreamer(
             self.tokenizer,
@@ -64,8 +84,8 @@ class LLMService:
         generation_kwargs = dict(
             **inputs,
             streamer=streamer,
-            max_new_tokens=settings.LLM_MAX_NEW_TOKENS,
-            temperature=settings.LLM_TEMPERATURE,
+            max_new_tokens=LLM_MAX_NEW_TOKENS,
+            temperature=LLM_TEMPERATURE,
             do_sample=True,
         )
 
@@ -89,3 +109,6 @@ class LLMService:
                     yield sentence
 
             await asyncio.sleep(0)
+
+        if buffer.strip():
+            yield buffer.strip()
