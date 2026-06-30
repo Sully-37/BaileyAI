@@ -13,6 +13,7 @@ from app.config import (
     LLM_MAX_NEW_TOKENS,
     LLM_TEMPERATURE,
 )
+from app.utils.gpu import gpu_is_available
 
 
 class LLMService:
@@ -29,6 +30,11 @@ class LLMService:
         """
         Loads the quantized Qwen model into GPU memory.
         """
+
+        if not gpu_is_available():
+            raise RuntimeError(
+                "GPU unavailable. Qwen inference requires CUDA before model loading."
+            )
 
         def _load():
             tokenizer = AutoTokenizer.from_pretrained(
@@ -52,6 +58,9 @@ class LLMService:
         """
         Streams model output as sentence-sized chunks for TTS.
         """
+
+        if not self.loaded or self.model is None or self.tokenizer is None:
+            raise RuntimeError("LLM model is not loaded")
 
         messages = [
             {

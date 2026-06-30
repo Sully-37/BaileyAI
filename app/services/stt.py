@@ -9,6 +9,7 @@ from app.config import (
     STT_COMPUTE_TYPE,
     STT_LANGUAGE,
 )
+from app.utils.gpu import gpu_is_available
 
 
 class STTService:
@@ -24,6 +25,11 @@ class STTService:
         """
         Loads Whisper weights into GPU memory.
         """
+
+        if not gpu_is_available():
+            raise RuntimeError(
+                "GPU unavailable. Faster-Whisper requires CUDA before model loading."
+            )
 
         def _load():
             return WhisperModel(
