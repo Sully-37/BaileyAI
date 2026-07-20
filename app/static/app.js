@@ -18,47 +18,65 @@ document.getElementById("acceptTerms").onclick = () => {
 };
 
 
-// Records a short browser mic sample and sends it to mission control.
+// Runs Mission Control with browser microphone audio when available.
 document.getElementById("missionTest").onclick = async () => {
     statusEl.textContent = "Running mission control test...";
     missionOutputEl.textContent = "";
 
-    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const recorder = new MediaRecorder(micStream, { mimeType: "audio/webm" });
+    try {
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(micStream, { mimeType: "audio/webm" });
 
-    const chunks = [];
+        const chunks = [];
 
-    recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-            chunks.push(event.data);
-        }
-    };
+        recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                chunks.push(event.data);
+            }
+        };
 
-    recorder.onstop = async () => {
-        micStream.getTracks().forEach(track => track.stop());
+        recorder.onstop = async () => {
+            micStream.getTracks().forEach(track => track.stop());
 
-        const audioBlob = new Blob(chunks, { type: "audio/webm" });
+            const audioBlob = new Blob(chunks, { type: "audio/webm" });
 
-        const formData = new FormData();
-        formData.append("audio", audioBlob, "mission-test.webm");
+            await sendMissionControlRequest(audioBlob);
+        };
 
-        const response = await fetch("/mission-control/test", {
-            method: "POST",
-            body: formData,
-        });
+        recorder.start();
 
-        const data = await response.json();
+        setTimeout(() => {
+            recorder.stop();
+        }, 1500);
 
-        missionOutputEl.textContent = JSON.stringify(data, null, 2);
-        statusEl.textContent = "Mission control test complete";
-    };
-
-    recorder.start();
-
-    setTimeout(() => {
-        recorder.stop();
-    }, 1500);
+    } catch (error) {
+        await sendMissionControlRequest(null, error.message);
+    }
 };
+
+
+// Sends mission-control request to backend.
+async function sendMissionControlRequest(audioBlob = null, browserMicError = null) {
+    const formData = new FormData();
+
+    if (audioBlob) {
+        formData.append("audio", audioBlob, "mission-test.webm");
+    }
+
+    const response = await fetch("/mission-control/test", {
+        method: "POST",
+        body: formData,
+    });
+
+    const data = await response.json();
+
+    if (browserMicError) {
+        data.browser_mic_error = browserMicError;
+    }
+
+    missionOutputEl.textContent = JSON.stringify(data, null, 2);
+    statusEl.textContent = "Mission control test complete";
+}
 
 
 // Loads all inference runtimes into GPU VRAM.
