@@ -1,51 +1,244 @@
+:root {
+    color-scheme: dark;
+    font-family:
+        Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+}
+
 body {
+    min-height: 100vh;
     margin: 0;
-    background: #0f1115;
-    color: white;
-    font-family: Arial, sans-serif;
-}
-
-.hidden {
-    display: none;
-}
-
-.container {
-    max-width: 900px;
-    margin: auto;
-    padding: 40px;
-}
-
-.controls {
-    margin-bottom: 20px;
+    background:
+        radial-gradient(
+            circle at top,
+            #242a38 0%,
+            #11141b 45%,
+            #090b10 100%
+        );
+    color: #ffffff;
 }
 
 button {
-    margin-right: 10px;
+    font: inherit;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.app-container {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 20px;
+    text-align: center;
+}
+
+h1 {
+    margin: 0 0 18px;
+    font-size: clamp(2.2rem, 7vw, 4rem);
+    letter-spacing: -0.04em;
+}
+
+.status {
+    min-height: 30px;
+    margin: 0 0 28px;
+    color: #d9deeb;
+    font-size: 1.1rem;
+}
+
+.instruction {
+    min-height: 24px;
+    margin: 24px 0 0;
+    color: #9098aa;
+}
+
+.microphone-button {
+    width: 150px;
+    height: 150px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+    font-size: 3.5rem;
+    cursor: pointer;
+    box-shadow:
+        0 20px 70px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transition:
+        transform 160ms ease,
+        background 160ms ease,
+        box-shadow 160ms ease;
+}
+
+.microphone-button:hover:not(:disabled) {
+    transform: scale(1.04);
+    background: rgba(255, 255, 255, 0.13);
+}
+
+.microphone-button:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+.microphone-button:disabled {
+    cursor: default;
+    opacity: 0.72;
+}
+
+.microphone-button.recording {
+    animation: recording-pulse 1.3s infinite;
+    background: rgba(215, 67, 67, 0.28);
+}
+
+.microphone-button.processing {
+    background: rgba(111, 123, 255, 0.22);
+}
+
+.microphone-button.speaking {
+    animation: speaking-pulse 1s infinite;
+    background: rgba(76, 185, 138, 0.22);
+}
+
+.pulse-container {
+    display: flex;
+    gap: 8px;
+    height: 24px;
+    margin-top: 20px;
+    align-items: center;
+}
+
+.pulse-container span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #cfd5e5;
+    animation: dot-pulse 1.2s infinite ease-in-out;
+}
+
+.pulse-container span:nth-child(2) {
+    animation-delay: 150ms;
+}
+
+.pulse-container span:nth-child(3) {
+    animation-delay: 300ms;
+}
+
+.conversation-preview {
+    width: min(620px, 100%);
+    min-height: 110px;
+    margin-top: 30px;
+    color: #b9c0cf;
+    line-height: 1.6;
+}
+
+.transcript,
+.assistant {
+    margin: 8px 0;
+}
+
+.assistant {
+    color: #ffffff;
+}
+
+.secondary-button,
+.primary-button {
+    border: 0;
+    border-radius: 10px;
     padding: 12px 20px;
-    border: none;
-    border-radius: 8px;
     cursor: pointer;
 }
 
-.panel {
-    background: #1a1d24;
-    padding: 20px;
-    border-radius: 12px;
-    margin-top: 20px;
+.primary-button {
+    background: #ffffff;
+    color: #11141b;
+}
+
+.secondary-button {
+    margin-top: 14px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #d9deeb;
+}
+
+.secondary-button:disabled {
+    cursor: default;
+    opacity: 0.4;
 }
 
 .modal {
     position: fixed;
+    z-index: 10;
     inset: 0;
-    background: rgba(0,0,0,0.8);
     display: flex;
     justify-content: center;
     align-items: center;
+    padding: 20px;
+    background: rgba(5, 7, 10, 0.88);
+    backdrop-filter: blur(12px);
 }
 
 .modal-content {
-    background: #1a1d24;
-    padding: 30px;
-    border-radius: 12px;
-    width: 500px;
+    width: min(480px, 100%);
+    padding: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 18px;
+    background: #171a22;
+    box-shadow: 0 30px 100px rgba(0, 0, 0, 0.5);
+}
+
+.modal-content h2 {
+    margin-top: 0;
+}
+
+.modal-content p {
+    color: #aeb5c4;
+    line-height: 1.6;
+}
+
+@keyframes recording-pulse {
+    0%,
+    100% {
+        box-shadow:
+            0 0 0 0 rgba(215, 67, 67, 0.35),
+            0 20px 70px rgba(0, 0, 0, 0.45);
+    }
+
+    50% {
+        box-shadow:
+            0 0 0 22px rgba(215, 67, 67, 0),
+            0 20px 70px rgba(0, 0, 0, 0.45);
+    }
+}
+
+@keyframes speaking-pulse {
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.05);
+    }
+}
+
+@keyframes dot-pulse {
+    0%,
+    80%,
+    100% {
+        transform: scale(0.65);
+        opacity: 0.4;
+    }
+
+    40% {
+        transform: scale(1);
+        opacity: 1;
+    }
 }

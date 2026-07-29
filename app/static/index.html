@@ -1,52 +1,103 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>BaileyAI</title>
-    <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-    <div id="termsModal" class="modal">
+    <title>BaileyAI</title>
+
+    <link
+        rel="stylesheet"
+        href="/static/styles.css"
+    >
+</head>
+
+<body>
+    <div
+        id="termsModal"
+        class="modal"
+    >
         <div class="modal-content">
-            <h2>Terms & Agreement</h2>
+            <h2>BaileyAI</h2>
 
             <p>
-                By continuing, you consent to microphone access and realtime
+                By continuing, you consent to microphone access and
                 AI-generated voice interaction for testing purposes.
             </p>
 
-            <button id="acceptTerms">Accept & Continue</button>
+            <button
+                id="acceptTerms"
+                class="primary-button"
+            >
+                Accept & Continue
+            </button>
         </div>
     </div>
 
-    <div class="container hidden" id="appContainer">
-        <h1>BaileyAI Voice Demo</h1>
+    <main
+        id="appContainer"
+        class="app-container hidden"
+    >
+        <h1>BaileyAI</h1>
 
-        <div class="controls">
-            <button id="missionTest">Mission Control Test</button>
-            <button id="loadModels">Load Models</button>
-            <button id="connect">Connect</button>
-            <button id="start">🎤 Start Conversation</button>
-            <button id="stop">Stop</button>
+        <p
+            id="status"
+            class="status"
+        >
+            Preparing Bailey...
+        </p>
+
+        <button
+            id="microphoneButton"
+            class="microphone-button"
+            type="button"
+            disabled
+            aria-label="Start or stop recording"
+        >
+            <span id="microphoneIcon">🎤</span>
+        </button>
+
+        <p
+            id="instruction"
+            class="instruction"
+        >
+            Please wait while Bailey loads.
+        </p>
+
+        <div
+            id="pulseContainer"
+            class="pulse-container hidden"
+            aria-hidden="true"
+        >
+            <span></span>
+            <span></span>
+            <span></span>
         </div>
 
-        <p id="status">Idle</p>
+        <section class="conversation-preview">
+            <p
+                id="transcript"
+                class="transcript"
+            ></p>
 
-        <div class="panel">
-            <h3>Mission Control</h3>
-            <pre id="missionOutput"></pre>
-        </div>
+            <p
+                id="assistant"
+                class="assistant"
+            ></p>
+        </section>
 
-        <div class="panel">
-            <h3>You</h3>
-            <p id="transcript"></p>
-        </div>
-
-        <div class="panel">
-            <h3>Bailey</h3>
-            <p id="assistant"></p>
-        </div>
-    </div>
+        <button
+            id="resetConversation"
+            class="secondary-button"
+            type="button"
+            disabled
+        >
+            New Conversation
+        </button>
+    </main>
 
     <script src="/static/app.js"></script>
 </body>

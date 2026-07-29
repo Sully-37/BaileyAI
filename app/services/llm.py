@@ -2,15 +2,15 @@ import asyncio
 import threading
 
 from transformers import (
-    AutoTokenizer,
     AutoModelForCausalLM,
+    AutoTokenizer,
     TextIteratorStreamer,
 )
 
 from app.config import (
     CUDA_DEVICE,
-    LLM_MODEL_NAME,
     LLM_MAX_NEW_TOKENS,
+    LLM_MODEL_NAME,
     LLM_TEMPERATURE,
 )
 from app.utils.gpu import gpu_is_available
@@ -18,7 +18,7 @@ from app.utils.gpu import gpu_is_available
 
 class LLMService:
     """
-    GPU resident conversational language model runtime.
+    GPU-resident conversational language model runtime.
     """
 
     def __init__(self):
@@ -30,6 +30,9 @@ class LLMService:
         """
         Loads the quantized Qwen model into GPU memory.
         """
+
+        if self.loaded:
+            return
 
         if not gpu_is_available():
             raise RuntimeError(
@@ -49,14 +52,63 @@ class LLMService:
                 trust_remote_code=True,
             )
 
+            model.eval()
+
             return tokenizer, model
 
         self.tokenizer, self.model = await asyncio.to_thread(_load)
         self.loaded = True
 
+    async def generate_response(
+        self,
+        messages: list[dict[str, str]],
+    ) -> str:
+        """
+        Generates one complete response using the provided conversation history.
+        """
+
+        if not self.loaded or self.model is None or self.tokenizer is None:
+            raise RuntimeError("LLM model is not loaded")
+
+        def _generate() -> str:
+            prompt = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+
+            inputs = self.tokenizer(
+                prompt,
+                return_tensors="pt",
+            ).to(CUDA_DEVICE)
+
+            generated = self.model.generate(
+                **inputs,
+                max_new_tokens=LLM_MAX_NEW_TOKENS,
+                temperature=LLM_TEMPERATURE,
+                do_sample=LLM_TEMPERATURE > 0,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+
+            prompt_token_count = inputs["input_ids"].shape[-1]
+            response_tokens = generated[0][prompt_token_count:]
+
+            return self.tokenizer.decode(
+                response_tokens,
+                skip_special_tokens=True,
+            ).strip()
+
+        response = await asyncio.to_thread(_generate)
+
+        if not response:
+            raise RuntimeError("LLM returned an empty response")
+
+        return response
+
     async def stream_sentences(self, user_text: str):
         """
-        Streams model output as sentence-sized chunks for TTS.
+        Preserves the existing sentence-streaming interface used by the
+        websocket implementation.
         """
 
         if not self.loaded or self.model is None or self.tokenizer is None:
@@ -90,17 +142,19 @@ class LLMService:
             skip_special_tokens=True,
         )
 
-        generation_kwargs = dict(
+        generation_kwargs = {
             **inputs,
-            streamer=streamer,
-            max_new_tokens=LLM_MAX_NEW_TOKENS,
-            temperature=LLM_TEMPERATURE,
-            do_sample=True,
-        )
+            "streamer": streamer,
+            "max_new_tokens": LLM_MAX_NEW_TOKENS,
+            "temperature": LLM_TEMPERATURE,
+            "do_sample": LLM_TEMPERATURE > 0,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
 
         thread = threading.Thread(
             target=self.model.generate,
             kwargs=generation_kwargs,
+            daemon=True,
         )
 
         thread.start()
@@ -110,7 +164,7 @@ class LLMService:
         for token in streamer:
             buffer += token
 
-            if any(buffer.endswith(p) for p in [".", "!", "?", "\n"]):
+            if any(buffer.endswith(mark) for mark in [".", "!", "?", "\n"]):
                 sentence = buffer.strip()
                 buffer = ""
 
