@@ -18,7 +18,7 @@ CUDA_DEVICE = "cuda"
 
 # Speech-to-Text
 
-STT_MODEL_NAME = "distil-whisper/distil-large-v3"
+STT_MODEL_NAME = "Systran/faster-distil-whisper-large-v3"
 STT_COMPUTE_TYPE = "float16"
 STT_LANGUAGE = "en"
 
