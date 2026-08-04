@@ -1,9 +1,11 @@
 fastapi
 uvicorn[standard]
 
-numpy
-torch
-torchaudio
+numpy<2
+
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
 
 transformers>=4.39.0
 accelerate
