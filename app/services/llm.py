@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import torch
 
 from transformers import (
     AutoModelForCausalLM,
@@ -47,8 +48,8 @@ class LLMService:
 
             model = AutoModelForCausalLM.from_pretrained(
                 LLM_MODEL_NAME,
-                device_map=CUDA_DEVICE,
-                torch_dtype="auto",
+                device_map="cuda",
+                torch_dtype=torch.float16,
                 trust_remote_code=True,
             )
 

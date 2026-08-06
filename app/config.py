@@ -24,7 +24,7 @@ STT_LANGUAGE = "en"
 
 # Language Model
 
-LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 LLM_MAX_NEW_TOKENS = 120
 LLM_TEMPERATURE = 0.7
 
