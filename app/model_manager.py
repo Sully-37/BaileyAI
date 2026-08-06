@@ -1,3 +1,5 @@
+import asyncio
+
 from app.services.llm import LLMService
 from app.services.stt import STTService
 from app.services.tts import TTSService
@@ -6,33 +8,40 @@ from app.services.tts import TTSService
 class ModelManager:
     """
     Centralized GPU runtime manager.
-
-    Responsible for:
-    - loading models into VRAM
-    - maintaining warm inference state
-    - exposing singleton model services
     """
 
     def __init__(self):
-        # Streaming speech-to-text runtime.
         self.stt = STTService()
-
-        # Conversational language model runtime.
         self.llm = LLMService()
-
-        # Text-to-speech runtime.
         self.tts = TTSService()
 
-        # Indicates whether all models are loaded.
         self.loaded = False
-
-        # Stores the latest model load error if startup fails.
+        self.loading = False
         self.last_error = None
+        self._load_task = None
+        self._load_lock = asyncio.Lock()
 
-    async def load_all(self):
+    async def start_loading(self):
+        """
+        Starts model loading in the background without holding the HTTP request open.
+        """
+
+        async with self._load_lock:
+            if self.loaded:
+                return
+
+            if self._load_task and not self._load_task.done():
+                return
+
+            self.loading = True
+            self.last_error = None
+            self._load_task = asyncio.create_task(self._load_all())
+
+    async def _load_all(self):
         """
         Loads all inference runtimes into GPU VRAM.
         """
+
         try:
             await self.stt.load()
             await self.llm.load()
@@ -44,14 +53,18 @@ class ModelManager:
         except Exception as exc:
             self.loaded = False
             self.last_error = str(exc)
-            raise
+
+        finally:
+            self.loading = False
 
     def status(self):
         """
-        Returns current model residency state.
+        Returns the current model-loading state.
         """
+
         return {
             "loaded": self.loaded,
+            "loading": self.loading,
             "stt": self.stt.loaded,
             "llm": self.llm.loaded,
             "tts": self.tts.loaded,

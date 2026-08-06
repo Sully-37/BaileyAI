@@ -112,13 +112,46 @@ async function readJsonResponse(response) {
 
 
 async function loadModels() {
-    setUiState("loading", "Loading Bailey into GPU memory...");
+    setUiState("loading", "Starting model load...");
 
     const response = await fetch("/startup/load-models", {
         method: "POST",
     });
 
-    return readJsonResponse(response);
+    await readJsonResponse(response);
+    await waitForModels();
+}
+
+
+async function waitForModels() {
+    const pollIntervalMs = 3000;
+    const timeoutMs = 15 * 60 * 1000;
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+        const response = await fetch("/health");
+        const data = await readJsonResponse(response);
+        const models = data.models;
+
+        if (models.loaded) {
+            return;
+        }
+
+        if (models.last_error) {
+            throw new Error(models.last_error);
+        }
+
+        setUiState(
+            "loading",
+            `Loading models: STT ${models.stt ? "✓" : "..."}, ` +
+            `LLM ${models.llm ? "✓" : "..."}, ` +
+            `TTS ${models.tts ? "✓" : "..."}`
+        );
+
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    }
+
+    throw new Error("Model loading timed out");
 }
 
 
