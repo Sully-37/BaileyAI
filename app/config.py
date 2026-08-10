@@ -1,10 +1,5 @@
 """
 Application configuration.
-
-These values define the architecture and are intentionally
-stored in source control.
-
-No secrets are currently required.
 """
 
 APP_NAME = "BaileyAI"
@@ -21,6 +16,7 @@ CUDA_DEVICE = "cuda"
 STT_MODEL_NAME = "Systran/faster-distil-whisper-large-v3"
 STT_COMPUTE_TYPE = "float16"
 STT_LANGUAGE = "en"
+STT_VAD_MIN_SILENCE_MS = 300
 
 # Language Model
 
@@ -31,5 +27,4 @@ LLM_TEMPERATURE = 0.7
 # Text-to-Speech
 
 TTS_MODEL_NAME = "chatterbox-turbo"
-
 VOICE_REFERENCE_PATH = "app/voices/bailey_reference.wav"

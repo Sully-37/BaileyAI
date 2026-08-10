@@ -5,6 +5,7 @@ Chatterbox Turbo Text-To-Speech Service.
 import asyncio
 import io
 import logging
+import time
 
 import numpy as np
 import soundfile as sf
@@ -34,7 +35,7 @@ class TTSService:
 
         if not gpu_is_available():
             raise RuntimeError(
-                "GPU unavailable. Chatterbox Turbo requires CUDA before model loading."
+                "GPU unavailable. Chatterbox Turbo requires CUDA."
             )
 
         def _load():
@@ -44,18 +45,30 @@ class TTSService:
                 device=CUDA_DEVICE,
             )
 
+        started_at = time.perf_counter()
+
         try:
             self.model = await asyncio.to_thread(_load)
             self.loaded = True
 
+            logger.info(
+                "TTS_LOAD complete elapsed_ms=%s",
+                round(
+                    (time.perf_counter() - started_at) * 1000
+                ),
+            )
+
         except Exception:
-            logger.exception("Failed to load Chatterbox Turbo TTS runtime.")
+            logger.exception(
+                "TTS_LOAD failed"
+            )
+
             self.loaded = False
             raise
 
     async def synthesize(self, text: str) -> bytes:
         """
-        Generates WAV audio bytes from text.
+        Generates WAV audio bytes.
         """
 
         if not self.loaded or self.model is None:
@@ -64,13 +77,27 @@ class TTSService:
         if not text.strip():
             raise ValueError("TTS input text is empty")
 
+        logger.info(
+            "TTS_INFERENCE started text_chars=%s",
+            len(text),
+        )
+
+        started_at = time.perf_counter()
+
         def _generate() -> bytes:
             waveform = self.model.generate(
                 text=text,
                 audio_prompt_path=VOICE_REFERENCE_PATH,
             )
 
-            audio_array = waveform.detach().cpu().float().numpy()
+            audio_array = (
+                waveform
+                .detach()
+                .cpu()
+                .float()
+                .numpy()
+            )
+
             audio_array = np.squeeze(audio_array)
 
             buffer = io.BytesIO()
@@ -84,6 +111,15 @@ class TTSService:
             )
 
             buffer.seek(0)
+
             return buffer.read()
 
-        return await asyncio.to_thread(_generate)
+        audio_bytes = await asyncio.to_thread(_generate)
+
+        logger.info(
+            "TTS_INFERENCE complete elapsed_ms=%s audio_bytes=%s",
+            round((time.perf_counter() - started_at) * 1000),
+            len(audio_bytes),
+        )
+
+        return audio_bytes
