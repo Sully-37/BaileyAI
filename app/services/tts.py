@@ -10,7 +10,11 @@ import time
 import numpy as np
 import soundfile as sf
 
-from app.config import CUDA_DEVICE, VOICE_REFERENCE_PATH
+from app.config import (
+    CUDA_DEVICE,
+    TTS_WARMUP_TEXT,
+    VOICE_REFERENCE_PATH,
+)
 from app.utils.gpu import gpu_is_available
 
 logger = logging.getLogger(__name__)
@@ -27,7 +31,7 @@ class TTSService:
 
     async def load(self):
         """
-        Loads Chatterbox Turbo into GPU VRAM.
+        Loads Chatterbox Turbo and performs one warm-up inference.
         """
 
         if self.loaded:
@@ -45,30 +49,67 @@ class TTSService:
                 device=CUDA_DEVICE,
             )
 
-        started_at = time.perf_counter()
+        load_started_at = time.perf_counter()
 
         try:
             self.model = await asyncio.to_thread(_load)
+
+            logger.info(
+                "TTS_LOAD model_ready elapsed_ms=%s",
+                round(
+                    (time.perf_counter() - load_started_at)
+                    * 1000
+                ),
+            )
+
+            warmup_started_at = time.perf_counter()
+
+            logger.info(
+                "TTS_WARMUP started text=%r",
+                TTS_WARMUP_TEXT,
+            )
+
+            await asyncio.to_thread(
+                self._generate_waveform,
+                TTS_WARMUP_TEXT,
+            )
+
+            logger.info(
+                "TTS_WARMUP complete elapsed_ms=%s",
+                round(
+                    (time.perf_counter() - warmup_started_at)
+                    * 1000
+                ),
+            )
+
             self.loaded = True
 
             logger.info(
-                "TTS_LOAD complete elapsed_ms=%s",
+                "TTS_LOAD complete total_ms=%s",
                 round(
-                    (time.perf_counter() - started_at) * 1000
+                    (time.perf_counter() - load_started_at)
+                    * 1000
                 ),
             )
 
         except Exception:
-            logger.exception(
-                "TTS_LOAD failed"
-            )
-
+            logger.exception("TTS_LOAD failed")
             self.loaded = False
             raise
 
+    def _generate_waveform(self, text: str):
+        """
+        Runs Chatterbox inference and returns the generated waveform.
+        """
+
+        return self.model.generate(
+            text=text,
+            audio_prompt_path=VOICE_REFERENCE_PATH,
+        )
+
     async def synthesize(self, text: str) -> bytes:
         """
-        Generates WAV audio bytes.
+        Generates WAV audio bytes for one response chunk.
         """
 
         if not self.loaded or self.model is None:
@@ -78,17 +119,15 @@ class TTSService:
             raise ValueError("TTS input text is empty")
 
         logger.info(
-            "TTS_INFERENCE started text_chars=%s",
+            "TTS_INFERENCE started text_chars=%s text=%r",
             len(text),
+            text,
         )
 
         started_at = time.perf_counter()
 
         def _generate() -> bytes:
-            waveform = self.model.generate(
-                text=text,
-                audio_prompt_path=VOICE_REFERENCE_PATH,
-            )
+            waveform = self._generate_waveform(text)
 
             audio_array = (
                 waveform
@@ -117,9 +156,14 @@ class TTSService:
         audio_bytes = await asyncio.to_thread(_generate)
 
         logger.info(
-            "TTS_INFERENCE complete elapsed_ms=%s audio_bytes=%s",
-            round((time.perf_counter() - started_at) * 1000),
+            "TTS_INFERENCE complete elapsed_ms=%s "
+            "audio_bytes=%s text_chars=%s",
+            round(
+                (time.perf_counter() - started_at)
+                * 1000
+            ),
             len(audio_bytes),
+            len(text),
         )
 
         return audio_bytes

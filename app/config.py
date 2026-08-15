@@ -24,7 +24,15 @@ LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 LLM_MAX_NEW_TOKENS = 120
 LLM_TEMPERATURE = 0.7
 
+# Streaming response tuning.
+LLM_INITIAL_BUFFER_CHUNKS = 2
+LLM_CHUNK_MAX_WORDS = 18
+
 # Text-to-Speech
 
 TTS_MODEL_NAME = "chatterbox-turbo"
 VOICE_REFERENCE_PATH = "app/voices/bailey_reference.wav"
+
+# Runs once during model loading so the user's first real
+# TTS request does not pay the cold-start inference penalty.
+TTS_WARMUP_TEXT = "Ready."
