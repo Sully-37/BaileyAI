@@ -1,4 +1,8 @@
-FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
 
 WORKDIR /app
 
@@ -42,13 +46,17 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Verify the core runtime.
+# Verify the core runtime and CUDA development environment.
 RUN python -c "\
-import torch, torchaudio, transformers; \
+import os, torch, torchaudio, transformers; \
 print('torch:', torch.__version__); \
 print('torchaudio:', torchaudio.__version__); \
 print('transformers:', transformers.__version__); \
-print('cuda:', torch.cuda.is_available())"
+print('torch cuda:', torch.version.cuda); \
+print('CUDA_HOME:', os.environ.get('CUDA_HOME')); \
+print('cuda available during build:', torch.cuda.is_available())"
+
+RUN nvcc --version
 
 COPY . .
 
