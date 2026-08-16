@@ -18,10 +18,15 @@ RUN git clone --recursive \
 
 WORKDIR /opt/CosyVoice
 
-RUN pip install --no-cache-dir -r requirements.txt
+# CosyVoice's Whisper dependency expects pkg_resources during build.
+RUN pip install --no-cache-dir "setuptools<70" wheel
+
+RUN pip install --no-cache-dir \
+    --no-build-isolation \
+    -r requirements.txt
 
 # Make CosyVoice and Matcha-TTS importable from Bailey.
-ENV PYTHONPATH="/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS:${PYTHONPATH}"
+ENV PYTHONPATH="/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS"
 
 WORKDIR /app
 
