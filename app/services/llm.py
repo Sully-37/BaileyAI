@@ -55,7 +55,7 @@ class LLMService:
             model = AutoModelForCausalLM.from_pretrained(
                 LLM_MODEL_NAME,
                 device_map="cuda",
-                dtype=torch.float16,
+                torch_dtype=torch.float16,
                 trust_remote_code=True,
             )
 
