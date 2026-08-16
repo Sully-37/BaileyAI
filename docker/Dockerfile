@@ -1,25 +1,41 @@
-FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
 
 WORKDIR /app
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        git \
+        sox \
+        libsox-dev \
+        build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Install CosyVoice and its required submodules.
+RUN git clone --recursive \
+    https://github.com/QwenAudio/CosyVoice.git \
+    /opt/CosyVoice
 
-RUN pip install --no-cache-dir \
-    torchvision==0.21.0 \
-    --index-url https://download.pytorch.org/whl/cu124
+WORKDIR /opt/CosyVoice
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Fail the image build immediately if the PyTorch binary set is broken.
+# Make CosyVoice and Matcha-TTS importable from Bailey.
+ENV PYTHONPATH="/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS:${PYTHONPATH}"
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Verify the core runtime.
 RUN python -c "\
-import torch, torchvision, torchaudio; \
+import torch, torchaudio, transformers; \
 print('torch:', torch.__version__); \
-print('torchvision:', torchvision.__version__); \
-print('torchaudio:', torchaudio.__version__)"
+print('torchaudio:', torchaudio.__version__); \
+print('transformers:', transformers.__version__); \
+print('cuda:', torch.cuda.is_available())"
 
 COPY . .
 

@@ -1,21 +1,21 @@
-fastapi
-uvicorn[standard]
+fastapi==0.115.6
+uvicorn[standard]==0.30.0
 
-numpy<2
+numpy==1.26.4
 
-torch==2.6.0
-torchvision==0.21.0
-torchaudio==2.6.0
+torch==2.3.1
+torchvision==0.18.1
+torchaudio==2.3.1
 
-transformers==5.2.0
+transformers==4.51.3
 accelerate
 
 faster-whisper
 
-chatterbox-tts==0.1.7
-
-soundfile
+soundfile==0.12.1
 python-multipart
 websockets
 jinja2
 optree>=0.13.0
+
+huggingface-hub

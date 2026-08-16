@@ -1,19 +1,25 @@
 """
-Chatterbox Turbo Text-To-Speech Service.
+CosyVoice 3 streaming Text-To-Speech Service.
 """
 
 import asyncio
 import io
 import logging
+import os
 import time
 
 import numpy as np
 import soundfile as sf
 
+from huggingface_hub import snapshot_download
+
 from app.config import (
-    CUDA_DEVICE,
+    TTS_MODEL_NAME,
+    TTS_MODEL_PATH,
     TTS_WARMUP_TEXT,
+    TTS_ZERO_SHOT_SPEAKER_ID,
     VOICE_REFERENCE_PATH,
+    VOICE_REFERENCE_TEXT,
 )
 from app.utils.gpu import gpu_is_available
 
@@ -22,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class TTSService:
     """
-    GPU-resident TTS runtime.
+    GPU-resident CosyVoice 3 streaming TTS runtime.
     """
 
     def __init__(self):
@@ -31,7 +37,8 @@ class TTSService:
 
     async def load(self):
         """
-        Loads Chatterbox Turbo and performs one warm-up inference.
+        Downloads CosyVoice when needed, loads it, caches
+        Bailey's voice, then performs a warm-up inference.
         """
 
         if self.loaded:
@@ -39,55 +46,56 @@ class TTSService:
 
         if not gpu_is_available():
             raise RuntimeError(
-                "GPU unavailable. Chatterbox Turbo requires CUDA."
+                "GPU unavailable. CosyVoice requires CUDA."
             )
 
-        def _load():
-            from chatterbox.tts_turbo import ChatterboxTurboTTS
-
-            return ChatterboxTurboTTS.from_pretrained(
-                device=CUDA_DEVICE,
+        if VOICE_REFERENCE_TEXT.startswith(
+            "REPLACE WITH"
+        ):
+            raise RuntimeError(
+                "VOICE_REFERENCE_TEXT must contain the "
+                "exact transcript of bailey_reference.wav."
             )
 
         load_started_at = time.perf_counter()
 
         try:
-            self.model = await asyncio.to_thread(_load)
+            await self._ensure_model_downloaded()
+
+            def _load():
+                from cosyvoice.cli.cosyvoice import AutoModel
+
+                return AutoModel(
+                    model_dir=TTS_MODEL_PATH,
+                )
+
+            self.model = await asyncio.to_thread(
+                _load
+            )
 
             logger.info(
                 "TTS_LOAD model_ready elapsed_ms=%s",
                 round(
-                    (time.perf_counter() - load_started_at)
+                    (
+                        time.perf_counter()
+                        - load_started_at
+                    )
                     * 1000
                 ),
             )
 
-            warmup_started_at = time.perf_counter()
-
-            logger.info(
-                "TTS_WARMUP started text=%r",
-                TTS_WARMUP_TEXT,
-            )
-
-            await asyncio.to_thread(
-                self._generate_waveform,
-                TTS_WARMUP_TEXT,
-            )
-
-            logger.info(
-                "TTS_WARMUP complete elapsed_ms=%s",
-                round(
-                    (time.perf_counter() - warmup_started_at)
-                    * 1000
-                ),
-            )
+            await self._cache_bailey_voice()
+            await self._warmup()
 
             self.loaded = True
 
             logger.info(
                 "TTS_LOAD complete total_ms=%s",
                 round(
-                    (time.perf_counter() - load_started_at)
+                    (
+                        time.perf_counter()
+                        - load_started_at
+                    )
                     * 1000
                 ),
             )
@@ -97,73 +105,236 @@ class TTSService:
             self.loaded = False
             raise
 
-    def _generate_waveform(self, text: str):
+    async def _ensure_model_downloaded(self):
         """
-        Runs Chatterbox inference and returns the generated waveform.
+        Downloads CosyVoice 3 only when it is not already
+        available on local disk.
         """
 
-        return self.model.generate(
-            text=text,
-            audio_prompt_path=VOICE_REFERENCE_PATH,
+        if os.path.isdir(TTS_MODEL_PATH):
+            logger.info(
+                "TTS_MODEL cache_hit path=%s",
+                TTS_MODEL_PATH,
+            )
+            return
+
+        logger.info(
+            "TTS_MODEL downloading model=%s",
+            TTS_MODEL_NAME,
         )
 
-    async def synthesize(self, text: str) -> bytes:
+        await asyncio.to_thread(
+            snapshot_download,
+            repo_id=TTS_MODEL_NAME,
+            local_dir=TTS_MODEL_PATH,
+        )
+
+        logger.info(
+            "TTS_MODEL download_complete path=%s",
+            TTS_MODEL_PATH,
+        )
+
+    async def _cache_bailey_voice(self):
         """
-        Generates WAV audio bytes for one response chunk.
+        Builds Bailey's zero-shot speaker conditioning once.
+        """
+
+        logger.info(
+            "TTS_VOICE_CACHE started speaker=%s",
+            TTS_ZERO_SHOT_SPEAKER_ID,
+        )
+
+        started_at = time.perf_counter()
+
+        def _cache():
+            result = self.model.add_zero_shot_spk(
+                VOICE_REFERENCE_TEXT,
+                VOICE_REFERENCE_PATH,
+                TTS_ZERO_SHOT_SPEAKER_ID,
+            )
+
+            if result is not True:
+                raise RuntimeError(
+                    "CosyVoice failed to cache Bailey's voice."
+                )
+
+        await asyncio.to_thread(_cache)
+
+        logger.info(
+            "TTS_VOICE_CACHE complete elapsed_ms=%s",
+            round(
+                (
+                    time.perf_counter()
+                    - started_at
+                )
+                * 1000
+            ),
+        )
+
+    async def _warmup(self):
+        """
+        Executes one discarded inference so the first user
+        request does not pay the cold-start cost.
+        """
+
+        logger.info(
+            "TTS_WARMUP started text=%r",
+            TTS_WARMUP_TEXT,
+        )
+
+        started_at = time.perf_counter()
+
+        def _run():
+            for _ in self.model.inference_zero_shot(
+                TTS_WARMUP_TEXT,
+                "",
+                "",
+                zero_shot_spk_id=(
+                    TTS_ZERO_SHOT_SPEAKER_ID
+                ),
+                stream=True,
+            ):
+                pass
+
+        await asyncio.to_thread(_run)
+
+        logger.info(
+            "TTS_WARMUP complete elapsed_ms=%s",
+            round(
+                (
+                    time.perf_counter()
+                    - started_at
+                )
+                * 1000
+            ),
+        )
+
+    async def stream_audio(
+        self,
+        text: str,
+    ):
+        """
+        Streams WAV chunks as CosyVoice produces them.
         """
 
         if not self.loaded or self.model is None:
-            raise RuntimeError("TTS model is not loaded")
+            raise RuntimeError(
+                "TTS model is not loaded"
+            )
 
         if not text.strip():
-            raise ValueError("TTS input text is empty")
+            raise ValueError(
+                "TTS input text is empty"
+            )
 
         logger.info(
-            "TTS_INFERENCE started text_chars=%s text=%r",
+            "TTS_STREAM started text_chars=%s text=%r",
             len(text),
             text,
         )
 
         started_at = time.perf_counter()
 
-        def _generate() -> bytes:
-            waveform = self._generate_waveform(text)
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
-            audio_array = (
-                waveform
-                .detach()
-                .cpu()
-                .float()
-                .numpy()
-            )
+        def _generate():
+            try:
+                for output in (
+                    self.model.inference_zero_shot(
+                        text,
+                        "",
+                        "",
+                        zero_shot_spk_id=(
+                            TTS_ZERO_SHOT_SPEAKER_ID
+                        ),
+                        stream=True,
+                    )
+                ):
+                    waveform = output["tts_speech"]
 
-            audio_array = np.squeeze(audio_array)
+                    audio_array = (
+                        waveform
+                        .detach()
+                        .cpu()
+                        .float()
+                        .numpy()
+                    )
 
-            buffer = io.BytesIO()
+                    audio_array = np.squeeze(
+                        audio_array
+                    )
 
-            sf.write(
-                buffer,
-                audio_array,
-                self.model.sr,
-                format="WAV",
-                subtype="PCM_16",
-            )
+                    buffer = io.BytesIO()
 
-            buffer.seek(0)
+                    sf.write(
+                        buffer,
+                        audio_array,
+                        self.model.sample_rate,
+                        format="WAV",
+                        subtype="PCM_16",
+                    )
 
-            return buffer.read()
+                    audio_bytes = buffer.getvalue()
 
-        audio_bytes = await asyncio.to_thread(_generate)
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(audio_bytes),
+                        loop,
+                    ).result()
 
-        logger.info(
-            "TTS_INFERENCE complete elapsed_ms=%s "
-            "audio_bytes=%s text_chars=%s",
-            round(
-                (time.perf_counter() - started_at)
-                * 1000
-            ),
-            len(audio_bytes),
-            len(text),
+            except Exception as exc:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(exc),
+                    loop,
+                ).result()
+
+            finally:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(None),
+                    loop,
+                ).result()
+
+        asyncio.create_task(
+            asyncio.to_thread(_generate)
         )
 
-        return audio_bytes
+        chunk_index = 0
+
+        while True:
+            item = await queue.get()
+
+            if item is None:
+                break
+
+            if isinstance(item, Exception):
+                raise item
+
+            chunk_index += 1
+
+            logger.info(
+                "TTS_STREAM audio_chunk index=%s "
+                "elapsed_ms=%s bytes=%s",
+                chunk_index,
+                round(
+                    (
+                        time.perf_counter()
+                        - started_at
+                    )
+                    * 1000
+                ),
+                len(item),
+            )
+
+            yield item
+
+        logger.info(
+            "TTS_STREAM complete chunks=%s elapsed_ms=%s",
+            chunk_index,
+            round(
+                (
+                    time.perf_counter()
+                    - started_at
+                )
+                * 1000
+            ),
+        )

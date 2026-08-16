@@ -24,15 +24,28 @@ LLM_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
 LLM_MAX_NEW_TOKENS = 120
 LLM_TEMPERATURE = 0.7
 
-# Streaming response tuning.
 LLM_INITIAL_BUFFER_CHUNKS = 1
 LLM_CHUNK_MAX_WORDS = 18
 
 # Text-to-Speech
 
-TTS_MODEL_NAME = "chatterbox-turbo"
-VOICE_REFERENCE_PATH = "app/voices/bailey_reference.wav"
+TTS_MODEL_NAME = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
 
-# Runs once during model loading so the user's first real
-# TTS request does not pay the cold-start inference penalty.
+TTS_MODEL_PATH = (
+    "/opt/bailey-models/Fun-CosyVoice3-0.5B"
+)
+
+VOICE_REFERENCE_PATH = (
+    "app/voices/bailey_reference.wav"
+)
+
+# IMPORTANT:
+# Replace this with the exact words spoken in
+# bailey_reference.wav.
+VOICE_REFERENCE_TEXT = (
+    "REPLACE WITH EXACT BAILEY REFERENCE TRANSCRIPT"
+)
+
+TTS_ZERO_SHOT_SPEAKER_ID = "bailey"
+
 TTS_WARMUP_TEXT = "Ready."
