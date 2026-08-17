@@ -43,7 +43,7 @@ VOICE_REFERENCE_PATH = (
 # Replace this with the exact words spoken in
 # bailey_reference.wav.
 VOICE_REFERENCE_TEXT = (
-    "Hello, my name is Bailey. I'm here to help you with whatever you need."
+    "Hey I'm Bailey. If you are wondering what I'm like, I'd say I'm pretty easy to talk to. I like good conversations, interesting ideas, and people who aren't afraid to ask questions. I am usually the one keeping things moving, finding solutions"
 )
 
 TTS_ZERO_SHOT_SPEAKER_ID = "bailey"
