@@ -25,6 +25,10 @@ from app.utils.gpu import gpu_is_available
 
 logger = logging.getLogger(__name__)
 
+COSYVOICE_PROMPT_TEXT = (
+    "You are a helpful assistant.<|endofprompt|>"
+)
+
 
 class TTSService:
     """
@@ -47,14 +51,6 @@ class TTSService:
         if not gpu_is_available():
             raise RuntimeError(
                 "GPU unavailable. CosyVoice requires CUDA."
-            )
-
-        if VOICE_REFERENCE_TEXT.startswith(
-            "REPLACE WITH"
-        ):
-            raise RuntimeError(
-                "VOICE_REFERENCE_TEXT must contain the "
-                "exact transcript of bailey_reference.wav."
             )
 
         load_started_at = time.perf_counter()
@@ -187,7 +183,7 @@ class TTSService:
         def _run():
             for _ in self.model.inference_zero_shot(
                 TTS_WARMUP_TEXT,
-                "",
+                COSYVOICE_PROMPT_TEXT,
                 "",
                 zero_shot_spk_id=(
                     TTS_ZERO_SHOT_SPEAKER_ID
@@ -243,7 +239,7 @@ class TTSService:
                 for output in (
                     self.model.inference_zero_shot(
                         text,
-                        "",
+                        COSYVOICE_PROMPT_TEXT,
                         "",
                         zero_shot_spk_id=(
                             TTS_ZERO_SHOT_SPEAKER_ID
