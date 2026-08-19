@@ -25,7 +25,7 @@ from app.utils.gpu import gpu_is_available
 
 logger = logging.getLogger(__name__)
 
-COSYVOICE_PROMPT_TEXT = (
+COSYVOICE_PROMPT_PREFIX = (
     "You are a helpful assistant.<|endofprompt|>"
 )
 
@@ -143,8 +143,13 @@ class TTSService:
         started_at = time.perf_counter()
 
         def _cache():
+            cosyvoice_prompt_text = (
+                COSYVOICE_PROMPT_PREFIX
+                + VOICE_REFERENCE_TEXT
+            )
+
             result = self.model.add_zero_shot_spk(
-                VOICE_REFERENCE_TEXT,
+                cosyvoice_prompt_text,
                 VOICE_REFERENCE_PATH,
                 TTS_ZERO_SHOT_SPEAKER_ID,
             )
@@ -183,7 +188,7 @@ class TTSService:
         def _run():
             for _ in self.model.inference_zero_shot(
                 TTS_WARMUP_TEXT,
-                COSYVOICE_PROMPT_TEXT,
+                "",
                 "",
                 zero_shot_spk_id=(
                     TTS_ZERO_SHOT_SPEAKER_ID
@@ -239,7 +244,7 @@ class TTSService:
                 for output in (
                     self.model.inference_zero_shot(
                         text,
-                        COSYVOICE_PROMPT_TEXT,
+                        "",
                         "",
                         zero_shot_spk_id=(
                             TTS_ZERO_SHOT_SPEAKER_ID
