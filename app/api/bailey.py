@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import queue
 import time
 import uuid
 
@@ -14,7 +15,6 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 
-from app.config import LLM_INITIAL_BUFFER_CHUNKS
 from app.model_manager import model_manager
 from app.session_store import session_store
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def elapsed_ms(started_at: float) -> int:
     """
-    Returns elapsed milliseconds from a perf_counter start time.
+    Returns elapsed milliseconds from a perf_counter start.
     """
 
     return round(
@@ -39,7 +39,7 @@ def elapsed_ms(started_at: float) -> int:
 
 def stream_event(payload: dict) -> str:
     """
-    Encodes one newline-delimited JSON streaming event.
+    Encodes one newline-delimited JSON event.
     """
 
     return (
@@ -124,15 +124,12 @@ async def bailey_turn(
     audio: UploadFile = File(...),
 ):
     """
-    Streams one complete Bailey voice turn.
+    Runs one Bailey conversation turn.
 
-    Flow:
-
-    browser audio
+    Browser audio
     -> STT
-    -> contextual LLM streaming
-    -> short text chunks
-    -> CosyVoice streaming TTS
+    -> streaming Qwen
+    -> continuous CosyVoice bi-stream
     -> streamed browser audio
     """
 
@@ -166,13 +163,7 @@ async def bailey_turn(
             },
         )
 
-    audio_read_started_at = time.perf_counter()
-
     audio_bytes = await audio.read()
-
-    audio_read_ms = elapsed_ms(
-        audio_read_started_at
-    )
 
     if not audio_bytes:
         raise HTTPException(
@@ -194,33 +185,36 @@ async def bailey_turn(
     )
 
     async def generate_stream():
-        """
-        Produces newline-delimited JSON events for the browser.
-        """
+        total_started_at = (
+            time.perf_counter()
+        )
 
-        total_started_at = time.perf_counter()
-
-        timings = {
-            "audio_read_ms": audio_read_ms,
-        }
+        timings = {}
 
         async with session.lock:
-            try:
-                # -----------------------------------------
-                # Speech-to-Text
-                # -----------------------------------------
+            llm_task = None
 
-                stt_started_at = time.perf_counter()
+            try:
+                # ----------------------------------
+                # STT
+                # ----------------------------------
+
+                stt_started_at = (
+                    time.perf_counter()
+                )
 
                 transcript = (
-                    await model_manager.stt.transcribe_bytes(
+                    await model_manager.stt
+                    .transcribe_bytes(
                         audio_bytes=audio_bytes,
                         suffix=".webm",
                     )
                 )
 
-                timings["stt_ms"] = elapsed_ms(
-                    stt_started_at
+                timings["stt_ms"] = (
+                    elapsed_ms(
+                        stt_started_at
+                    )
                 )
 
                 logger.info(
@@ -236,13 +230,15 @@ async def bailey_turn(
                     "request_id": request_id,
                     "text": transcript,
                     "timings": {
-                        "stt_ms": timings["stt_ms"],
+                        "stt_ms": (
+                            timings["stt_ms"]
+                        ),
                     },
                 })
 
-                # -----------------------------------------
-                # Build contextual LLM input
-                # -----------------------------------------
+                # ----------------------------------
+                # Conversation context
+                # ----------------------------------
 
                 llm_messages = [
                     *session.messages,
@@ -252,9 +248,10 @@ async def bailey_turn(
                     },
                 ]
 
-                sentence_queue: asyncio.Queue = (
-                    asyncio.Queue()
-                )
+                # Thread-safe bridge between Qwen's
+                # async producer and CosyVoice's
+                # synchronous text generator.
+                text_queue = queue.Queue()
 
                 llm_chunks: list[str] = []
 
@@ -265,9 +262,9 @@ async def bailey_turn(
                     time.perf_counter()
                 )
 
-                # -----------------------------------------
-                # LLM producer
-                # -----------------------------------------
+                # ----------------------------------
+                # Qwen producer
+                # ----------------------------------
 
                 async def produce_llm():
                     nonlocal llm_error
@@ -280,8 +277,12 @@ async def bailey_turn(
                                 llm_messages
                             )
                         ):
-                            if not first_chunk_seen:
-                                first_chunk_seen = True
+                            if (
+                                not first_chunk_seen
+                            ):
+                                first_chunk_seen = (
+                                    True
+                                )
 
                                 timings[
                                     "llm_first_chunk_ms"
@@ -291,21 +292,31 @@ async def bailey_turn(
 
                                 logger.info(
                                     "TURN llm_first_chunk "
-                                    "request=%s elapsed_ms=%s",
+                                    "request=%s "
+                                    "elapsed_ms=%s",
                                     request_id,
                                     timings[
                                         "llm_first_chunk_ms"
                                     ],
                                 )
 
-                            llm_chunks.append(chunk)
+                            llm_chunks.append(
+                                chunk
+                            )
 
-                            await sentence_queue.put(
+                            # Feed this chunk directly
+                            # into the live CosyVoice
+                            # inference.
+                            text_queue.put(
                                 chunk
                             )
 
                     except Exception as exc:
                         llm_error = exc
+
+                        text_queue.put(
+                            exc
+                        )
 
                     finally:
                         timings[
@@ -314,192 +325,123 @@ async def bailey_turn(
                             llm_started_at
                         )
 
-                        await sentence_queue.put(
-                            None
-                        )
+                        # Signals CosyVoice that Qwen
+                        # has finished producing text.
+                        text_queue.put(None)
 
-                producer_task = (
-                    asyncio.create_task(
-                        produce_llm()
-                    )
+                llm_task = asyncio.create_task(
+                    produce_llm()
                 )
 
-                # -----------------------------------------
-                # Initial LLM buffer
-                # -----------------------------------------
+                # ----------------------------------
+                # ONE continuous CosyVoice inference
+                # ----------------------------------
 
-                initial_chunks: list[str] = []
+                tts_started_at = (
+                    time.perf_counter()
+                )
 
-                while (
-                    len(initial_chunks)
-                    < LLM_INITIAL_BUFFER_CHUNKS
-                ):
-                    item = await sentence_queue.get()
-
-                    if item is None:
-                        break
-
-                    initial_chunks.append(item)
+                first_audio_ready = False
+                audio_chunk_index = 0
 
                 logger.info(
-                    "TURN initial_buffer_ready "
-                    "request=%s chunks=%s "
-                    "elapsed_ms=%s",
+                    "TURN bistream_started "
+                    "request=%s",
                     request_id,
-                    len(initial_chunks),
-                    elapsed_ms(total_started_at),
                 )
 
-                # -----------------------------------------
-                # TTS streaming
-                # -----------------------------------------
-
-                audio_chunk_index = 0
-                tts_total_ms = 0
-                first_audio_ready = False
-
-                async def synthesize_and_stream(
-                    text_chunk: str,
+                async for audio_response in (
+                    model_manager.tts
+                    .stream_audio_from_text_queue(
+                        text_queue
+                    )
                 ):
-                    """
-                    Sends one LLM text chunk through CosyVoice.
+                    audio_chunk_index += 1
 
-                    CosyVoice may emit multiple audio chunks
-                    before synthesis of the text chunk finishes.
-                    """
+                    if not first_audio_ready:
+                        first_audio_ready = True
 
-                    nonlocal audio_chunk_index
-                    nonlocal tts_total_ms
-                    nonlocal first_audio_ready
-
-                    tts_started_at = (
-                        time.perf_counter()
-                    )
-
-                    logger.info(
-                        "TURN tts_text_chunk_started "
-                        "request=%s text=%r",
-                        request_id,
-                        text_chunk,
-                    )
-
-                    async for audio_response in (
-                        model_manager.tts.stream_audio(
-                            text_chunk
+                        timings[
+                            "first_audio_ready_ms"
+                        ] = elapsed_ms(
+                            total_started_at
                         )
-                    ):
-                        audio_chunk_index += 1
 
-                        current_tts_ms = elapsed_ms(
+                        timings[
+                            "tts_first_audio_ms"
+                        ] = elapsed_ms(
                             tts_started_at
                         )
 
-                        if not first_audio_ready:
-                            first_audio_ready = True
-
+                        logger.info(
+                            "TURN first_audio_ready "
+                            "request=%s "
+                            "elapsed_ms=%s "
+                            "tts_ms=%s",
+                            request_id,
                             timings[
                                 "first_audio_ready_ms"
-                            ] = elapsed_ms(
-                                total_started_at
-                            )
-
-                            logger.info(
-                                "TURN first_audio_ready "
-                                "request=%s elapsed_ms=%s",
-                                request_id,
-                                timings[
-                                    "first_audio_ready_ms"
-                                ],
-                            )
-
-                        logger.info(
-                            "TURN audio_chunk_ready "
-                            "request=%s chunk=%s "
-                            "tts_elapsed_ms=%s "
-                            "audio_bytes=%s",
-                            request_id,
-                            audio_chunk_index,
-                            current_tts_ms,
-                            len(audio_response),
+                            ],
+                            timings[
+                                "tts_first_audio_ms"
+                            ],
                         )
-
-                        yield stream_event({
-                            "type": "audio",
-                            "request_id": request_id,
-                            "index": audio_chunk_index,
-                            "text": text_chunk,
-                            "audio_mime_type": (
-                                "audio/wav"
-                            ),
-                            "audio_base64": (
-                                base64.b64encode(
-                                    audio_response
-                                ).decode("ascii")
-                            ),
-                            "timings": {
-                                "tts_elapsed_ms": (
-                                    current_tts_ms
-                                ),
-                                "backend_elapsed_ms": (
-                                    elapsed_ms(
-                                        total_started_at
-                                    )
-                                ),
-                            },
-                        })
-
-                    chunk_total_ms = elapsed_ms(
-                        tts_started_at
-                    )
-
-                    tts_total_ms += chunk_total_ms
 
                     logger.info(
-                        "TURN tts_text_chunk_complete "
-                        "request=%s elapsed_ms=%s "
-                        "text=%r",
+                        "TURN audio_chunk_ready "
+                        "request=%s chunk=%s "
+                        "elapsed_ms=%s "
+                        "audio_bytes=%s",
                         request_id,
-                        chunk_total_ms,
-                        text_chunk,
+                        audio_chunk_index,
+                        elapsed_ms(
+                            tts_started_at
+                        ),
+                        len(audio_response),
                     )
 
-                # -----------------------------------------
-                # Process initial buffered chunks
-                # -----------------------------------------
+                    yield stream_event({
+                        "type": "audio",
+                        "request_id": request_id,
+                        "index": (
+                            audio_chunk_index
+                        ),
+                        "audio_mime_type": (
+                            "audio/wav"
+                        ),
+                        "audio_base64": (
+                            base64.b64encode(
+                                audio_response
+                            ).decode("ascii")
+                        ),
+                        "timings": {
+                            "tts_elapsed_ms": (
+                                elapsed_ms(
+                                    tts_started_at
+                                )
+                            ),
+                            "backend_elapsed_ms": (
+                                elapsed_ms(
+                                    total_started_at
+                                )
+                            ),
+                        },
+                    })
 
-                for chunk in initial_chunks:
-                    async for event in (
-                        synthesize_and_stream(
-                            chunk
-                        )
-                    ):
-                        yield event
+                timings["tts_total_ms"] = (
+                    elapsed_ms(
+                        tts_started_at
+                    )
+                )
 
-                # -----------------------------------------
-                # Continue consuming LLM chunks
-                # -----------------------------------------
+                # ----------------------------------
+                # Finish Qwen
+                # ----------------------------------
 
-                while True:
-                    item = await sentence_queue.get()
-
-                    if item is None:
-                        break
-
-                    async for event in (
-                        synthesize_and_stream(
-                            item
-                        )
-                    ):
-                        yield event
-
-                await producer_task
+                await llm_task
 
                 if llm_error:
                     raise llm_error
-
-                # -----------------------------------------
-                # Finalize conversation context
-                # -----------------------------------------
 
                 response_text = " ".join(
                     llm_chunks
@@ -510,15 +452,15 @@ async def bailey_turn(
                         "LLM returned an empty response"
                     )
 
+                # ----------------------------------
+                # Save in-memory context
+                # ----------------------------------
+
                 session_store.append_turn(
                     session=session,
                     user_text=transcript,
                     assistant_text=response_text,
                 )
-
-                timings[
-                    "tts_total_ms"
-                ] = tts_total_ms
 
                 timings[
                     "backend_stream_complete_ms"
@@ -532,18 +474,24 @@ async def bailey_turn(
                     "stt_ms=%s "
                     "llm_first_chunk_ms=%s "
                     "llm_total_ms=%s "
+                    "tts_first_audio_ms=%s "
                     "tts_total_ms=%s "
                     "first_audio_ready_ms=%s "
                     "backend_total_ms=%s",
                     request_id,
                     session.session_id,
                     session.turn_count,
-                    timings.get("stt_ms"),
+                    timings.get(
+                        "stt_ms"
+                    ),
                     timings.get(
                         "llm_first_chunk_ms"
                     ),
                     timings.get(
                         "llm_total_ms"
+                    ),
+                    timings.get(
+                        "tts_first_audio_ms"
                     ),
                     timings.get(
                         "tts_total_ms"
@@ -563,7 +511,9 @@ async def bailey_turn(
                         session.session_id
                     ),
                     "turn": session.turn_count,
-                    "response_text": response_text,
+                    "response_text": (
+                        response_text
+                    ),
                     "timings": timings,
                 })
 
@@ -575,6 +525,12 @@ async def bailey_turn(
                     session_id,
                     exc,
                 )
+
+                if (
+                    llm_task
+                    and not llm_task.done()
+                ):
+                    llm_task.cancel()
 
                 yield stream_event({
                     "type": "error",

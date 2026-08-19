@@ -1,11 +1,12 @@
 """
-CosyVoice 3 streaming Text-To-Speech Service.
+CosyVoice 3 continuous bi-streaming Text-To-Speech Service.
 """
 
 import asyncio
 import io
 import logging
 import os
+import queue
 import time
 
 import numpy as np
@@ -32,7 +33,10 @@ COSYVOICE_PROMPT_PREFIX = (
 
 class TTSService:
     """
-    GPU-resident CosyVoice 3 streaming TTS runtime.
+    GPU-resident CosyVoice 3 runtime.
+
+    One CosyVoice inference call remains alive for an entire
+    Bailey response while Qwen feeds text chunks into it.
     """
 
     def __init__(self):
@@ -42,7 +46,7 @@ class TTSService:
     async def load(self):
         """
         Downloads CosyVoice when needed, loads it, caches
-        Bailey's voice, then performs a warm-up inference.
+        Bailey's voice, then performs one warm-up inference.
         """
 
         if self.loaded:
@@ -103,8 +107,7 @@ class TTSService:
 
     async def _ensure_model_downloaded(self):
         """
-        Downloads CosyVoice 3 only when it is not already
-        available on local disk.
+        Downloads CosyVoice only if it is not already cached.
         """
 
         if os.path.isdir(TTS_MODEL_PATH):
@@ -143,13 +146,13 @@ class TTSService:
         started_at = time.perf_counter()
 
         def _cache():
-            cosyvoice_prompt_text = (
+            prompt_text = (
                 COSYVOICE_PROMPT_PREFIX
                 + VOICE_REFERENCE_TEXT
             )
 
             result = self.model.add_zero_shot_spk(
-                cosyvoice_prompt_text,
+                prompt_text,
                 VOICE_REFERENCE_PATH,
                 TTS_ZERO_SHOT_SPEAKER_ID,
             )
@@ -174,8 +177,7 @@ class TTSService:
 
     async def _warmup(self):
         """
-        Executes one discarded inference so the first user
-        request does not pay the cold-start cost.
+        Executes one discarded inference to warm CosyVoice.
         """
 
         logger.info(
@@ -210,12 +212,16 @@ class TTSService:
             ),
         )
 
-    async def stream_audio(
+    async def stream_audio_from_text_queue(
         self,
-        text: str,
+        text_queue: queue.Queue,
     ):
         """
-        Streams WAV chunks as CosyVoice produces them.
+        Runs one continuous CosyVoice inference.
+
+        Qwen places short text chunks into text_queue.
+        CosyVoice consumes those chunks through a generator
+        while simultaneously producing streamed audio.
         """
 
         if not self.loaded or self.model is None:
@@ -223,27 +229,68 @@ class TTSService:
                 "TTS model is not loaded"
             )
 
-        if not text.strip():
-            raise ValueError(
-                "TTS input text is empty"
-            )
-
-        logger.info(
-            "TTS_STREAM started text_chars=%s text=%r",
-            len(text),
-            text,
-        )
-
         started_at = time.perf_counter()
 
-        queue: asyncio.Queue = asyncio.Queue()
+        output_queue: asyncio.Queue = (
+            asyncio.Queue()
+        )
+
         loop = asyncio.get_running_loop()
+
+        logger.info(
+            "TTS_BISTREAM started"
+        )
+
+        def text_generator():
+            """
+            Bridges the thread-safe Qwen text queue into
+            CosyVoice's synchronous generator interface.
+            """
+
+            text_index = 0
+
+            while True:
+                item = text_queue.get()
+
+                if item is None:
+                    logger.info(
+                        "TTS_BISTREAM text_input_complete "
+                        "chunks=%s",
+                        text_index,
+                    )
+                    break
+
+                if isinstance(item, Exception):
+                    raise item
+
+                text = str(item).strip()
+
+                if not text:
+                    continue
+
+                text_index += 1
+
+                logger.info(
+                    "TTS_BISTREAM text_chunk index=%s "
+                    "elapsed_ms=%s text=%r",
+                    text_index,
+                    round(
+                        (
+                            time.perf_counter()
+                            - started_at
+                        )
+                        * 1000
+                    ),
+                    text,
+                )
+
+                yield text
 
         def _generate():
             try:
                 for output in (
                     self.model.inference_zero_shot(
-                        text,
+                        text_generator(),
                         "",
                         "",
                         zero_shot_spk_id=(
@@ -252,7 +299,9 @@ class TTSService:
                         stream=True,
                     )
                 ):
-                    waveform = output["tts_speech"]
+                    waveform = output[
+                        "tts_speech"
+                    ]
 
                     audio_array = (
                         waveform
@@ -276,33 +325,37 @@ class TTSService:
                         subtype="PCM_16",
                     )
 
-                    audio_bytes = buffer.getvalue()
+                    audio_bytes = (
+                        buffer.getvalue()
+                    )
 
                     asyncio.run_coroutine_threadsafe(
-                        queue.put(audio_bytes),
+                        output_queue.put(
+                            audio_bytes
+                        ),
                         loop,
                     ).result()
 
             except Exception as exc:
                 asyncio.run_coroutine_threadsafe(
-                    queue.put(exc),
+                    output_queue.put(exc),
                     loop,
                 ).result()
 
             finally:
                 asyncio.run_coroutine_threadsafe(
-                    queue.put(None),
+                    output_queue.put(None),
                     loop,
                 ).result()
 
-        asyncio.create_task(
+        worker_task = asyncio.create_task(
             asyncio.to_thread(_generate)
         )
 
-        chunk_index = 0
+        audio_chunk_index = 0
 
         while True:
-            item = await queue.get()
+            item = await output_queue.get()
 
             if item is None:
                 break
@@ -310,12 +363,12 @@ class TTSService:
             if isinstance(item, Exception):
                 raise item
 
-            chunk_index += 1
+            audio_chunk_index += 1
 
             logger.info(
-                "TTS_STREAM audio_chunk index=%s "
+                "TTS_BISTREAM audio_chunk index=%s "
                 "elapsed_ms=%s bytes=%s",
-                chunk_index,
+                audio_chunk_index,
                 round(
                     (
                         time.perf_counter()
@@ -328,9 +381,11 @@ class TTSService:
 
             yield item
 
+        await worker_task
+
         logger.info(
-            "TTS_STREAM complete chunks=%s elapsed_ms=%s",
-            chunk_index,
+            "TTS_BISTREAM complete chunks=%s elapsed_ms=%s",
+            audio_chunk_index,
             round(
                 (
                     time.perf_counter()
