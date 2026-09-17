@@ -407,7 +407,10 @@ async def bailey_turn(
                             audio_chunk_index
                         ),
                         "audio_mime_type": (
-                            "audio/wav"
+                            "audio/pcm"
+                        ),
+                        "sample_rate": (
+                            model_manager.tts.sample_rate
                         ),
                         "audio_base64": (
                             base64.b64encode(

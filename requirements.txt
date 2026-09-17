@@ -19,3 +19,4 @@ jinja2
 optree>=0.13.0
 
 huggingface-hub
+pocket-tts
