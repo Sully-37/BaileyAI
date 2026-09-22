@@ -28,6 +28,10 @@ class TTSService:
     """
 
     def __init__(self):
+        """
+        Initializes the Pocket TTS service state.
+        """
+
         self.model = None
         self.voice_state = None
         self.loaded = False
@@ -51,9 +55,13 @@ class TTSService:
             self.sample_rate = self.model.sample_rate
 
             logger.info(
-                "TTS_LOAD model_ready elapsed_ms=%s device=%s",
+                "TTS_LOAD model_ready elapsed_ms=%s "
+                "device=%s",
                 round(
-                    (time.perf_counter() - started_at)
+                    (
+                        time.perf_counter()
+                        - started_at
+                    )
                     * 1000
                 ),
                 self.model.device,
@@ -82,25 +90,37 @@ class TTSService:
             self.loaded = True
 
             logger.info(
-                "TTS_LOAD complete total_ms=%s sample_rate=%s",
+                "TTS_LOAD complete total_ms=%s "
+                "sample_rate=%s",
                 round(
-                    (time.perf_counter() - started_at)
+                    (
+                        time.perf_counter()
+                        - started_at
+                    )
                     * 1000
                 ),
                 self.sample_rate,
             )
 
         except Exception:
-            logger.exception("TTS_LOAD failed")
+            logger.exception(
+                "TTS_LOAD failed"
+            )
+
             self.loaded = False
+
             raise
 
     async def _warmup(self):
         """
-        Runs one discarded streaming inference.
+        Runs one discarded Pocket TTS streaming inference.
         """
 
         def _run():
+            """
+            Generates and discards one warmup response.
+            """
+
             for _ in self.model.generate_audio_stream(
                 self.voice_state,
                 TTS_WARMUP_TEXT,
@@ -109,12 +129,17 @@ class TTSService:
 
         started_at = time.perf_counter()
 
-        await asyncio.to_thread(_run)
+        await asyncio.to_thread(
+            _run
+        )
 
         logger.info(
             "TTS_WARMUP complete elapsed_ms=%s",
             round(
-                (time.perf_counter() - started_at)
+                (
+                    time.perf_counter()
+                    - started_at
+                )
                 * 1000
             ),
         )
@@ -131,18 +156,26 @@ class TTSService:
         immediately instead of waiting for a complete WAV.
         """
 
-        if not self.loaded or self.model is None:
+        if (
+            not self.loaded
+            or self.model is None
+            or self.voice_state is None
+        ):
             raise RuntimeError(
                 "TTS model is not loaded"
             )
 
         loop = asyncio.get_running_loop()
+
         output_queue = asyncio.Queue()
 
         started_at = time.perf_counter()
 
         def _generate():
-            audio_index = 0
+            """
+            Consumes Qwen text chunks and generates Pocket
+            TTS PCM audio frames in a worker thread.
+            """
 
             try:
                 while True:
@@ -151,10 +184,15 @@ class TTSService:
                     if item is None:
                         break
 
-                    if isinstance(item, Exception):
+                    if isinstance(
+                        item,
+                        Exception,
+                    ):
                         raise item
 
-                    text = str(item).strip()
+                    text = str(
+                        item
+                    ).strip()
 
                     if not text:
                         continue
@@ -165,7 +203,8 @@ class TTSService:
                     )
 
                     for audio in (
-                        self.model.generate_audio_stream(
+                        self.model
+                        .generate_audio_stream(
                             self.voice_state,
                             text,
                         )
@@ -189,34 +228,58 @@ class TTSService:
                         )
 
                         pcm16 = (
-                            audio_array * 32767.0
-                        ).astype("<i2")
+                            audio_array
+                            * 32767.0
+                        ).astype(
+                            "<i2"
+                        )
 
-                        audio_bytes = pcm16.tobytes()
+                        audio_bytes = (
+                            pcm16.tobytes()
+                        )
 
-                        audio_index += 1
+                        future = (
+                            asyncio
+                            .run_coroutine_threadsafe(
+                                output_queue.put(
+                                    audio_bytes
+                                ),
+                                loop,
+                            )
+                        )
 
-                        asyncio.run_coroutine_threadsafe(
-                            output_queue.put(
-                                audio_bytes
-                            ),
-                            loop,
-                        ).result()
+                        future.result()
 
             except Exception as exc:
-                asyncio.run_coroutine_threadsafe(
-                    output_queue.put(exc),
-                    loop,
-                ).result()
+                future = (
+                    asyncio
+                    .run_coroutine_threadsafe(
+                        output_queue.put(
+                            exc
+                        ),
+                        loop,
+                    )
+                )
+
+                future.result()
 
             finally:
-                asyncio.run_coroutine_threadsafe(
-                    output_queue.put(None),
-                    loop,
-                ).result()
+                future = (
+                    asyncio
+                    .run_coroutine_threadsafe(
+                        output_queue.put(
+                            None
+                        ),
+                        loop,
+                    )
+                )
+
+                future.result()
 
         worker = asyncio.create_task(
-            asyncio.to_thread(_generate)
+            asyncio.to_thread(
+                _generate
+            )
         )
 
         chunk_index = 0
@@ -227,16 +290,23 @@ class TTSService:
             if item is None:
                 break
 
-            if isinstance(item, Exception):
+            if isinstance(
+                item,
+                Exception,
+            ):
                 raise item
 
             chunk_index += 1
 
             logger.info(
-                "TTS_AUDIO chunk=%s elapsed_ms=%s bytes=%s",
+                "TTS_AUDIO chunk=%s "
+                "elapsed_ms=%s bytes=%s",
                 chunk_index,
                 round(
-                    (time.perf_counter() - started_at)
+                    (
+                        time.perf_counter()
+                        - started_at
+                    )
                     * 1000
                 ),
                 len(item),
