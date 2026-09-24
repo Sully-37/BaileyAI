@@ -1,3 +1,4 @@
+
 import { state } from "./state.js";
 import {
     transcriptEl,
@@ -9,10 +10,12 @@ import {
     enqueueBaileyAudio,
     markPlaybackStreamComplete,
     failPlayback,
+    cancelBaileyPlayback,
 } from "./playback.js";
 import { setUiState } from "./ui.js";
 import { logLatency } from "./utils.js";
 
+let activeTurnController = null;
 
 export async function sendConversationTurn(
     audioBlob,
@@ -20,6 +23,11 @@ export async function sendConversationTurn(
 ) {
     const requestStartedAt =
         performance.now();
+
+    const controller =
+        new AbortController();
+
+    activeTurnController = controller;
 
     let playbackStarted = false;
     let playbackPromise = null;
@@ -44,25 +52,21 @@ export async function sendConversationTurn(
             "bailey-turn.webm",
         );
 
-        const captureToRequestMs =
-            Math.round(
-                requestStartedAt -
-                captureEndedAt
-            );
-
         logLatency(
             "turn_request_started",
             {
-                audio_bytes:
-                    audioBlob.size,
+                audio_bytes: audioBlob.size,
                 capture_to_request_ms:
-                    captureToRequestMs,
+                    Math.round(
+                        requestStartedAt -
+                        captureEndedAt,
+                    ),
             },
         );
 
         playbackPromise =
             beginBaileyPlayback(
-                requestStartedAt
+                requestStartedAt,
             );
 
         playbackStarted = true;
@@ -72,6 +76,7 @@ export async function sendConversationTurn(
             {
                 method: "POST",
                 body: formData,
+                signal: controller.signal,
             },
         );
 
@@ -90,9 +95,8 @@ export async function sendConversationTurn(
                     detail.message ||
                     detail.error ||
                     message;
-
             } catch {
-                // Preserve default message.
+                // Preserve the HTTP error message.
             }
 
             throw new Error(message);
@@ -114,6 +118,101 @@ export async function sendConversationTurn(
         let firstEventReceived = false;
         let firstAudioEventReceived = false;
         let streamCompleted = false;
+
+        /**
+         * Handles one decoded NDJSON event.
+         */
+        function handleEvent(event) {
+            if (!firstEventReceived) {
+                firstEventReceived = true;
+
+                logLatency(
+                    "first_stream_event",
+                    {
+                        elapsed_ms:
+                            Math.round(
+                                performance.now() -
+                                requestStartedAt,
+                            ),
+                        type: event.type,
+                    },
+                );
+            }
+
+            if (event.type === "transcript") {
+                transcriptEl.textContent =
+                    `You: ${event.text}`;
+
+                return;
+            }
+
+            if (event.type === "audio") {
+                if (!firstAudioEventReceived) {
+                    firstAudioEventReceived = true;
+
+                    logLatency(
+                        "first_audio_chunk_received",
+                        {
+                            elapsed_ms:
+                                Math.round(
+                                    performance.now() -
+                                    requestStartedAt,
+                                ),
+                            chunk_index:
+                                event.index,
+                            backend:
+                                event.timings,
+                        },
+                    );
+                }
+
+                enqueueBaileyAudio(
+                    event.audio_base64,
+                    event.audio_mime_type,
+                    event.index,
+                    event.sample_rate,
+                );
+
+                return;
+            }
+
+            if (event.type === "complete") {
+                streamCompleted = true;
+
+                assistantEl.textContent =
+                    `Bailey: ${event.response_text}`;
+
+                console.table(
+                    event.timings,
+                );
+
+                logLatency(
+                    "backend_stream_complete",
+                    {
+                        request_id:
+                            event.request_id,
+                        backend:
+                            event.timings,
+                        browser_elapsed_ms:
+                            Math.round(
+                                performance.now() -
+                                requestStartedAt,
+                            ),
+                    },
+                );
+
+                markPlaybackStreamComplete();
+
+                return;
+            }
+
+            if (event.type === "error") {
+                throw new Error(
+                    event.message ||
+                    "Bailey turn failed",
+                );
+            }
+        }
 
         while (true) {
             const {
@@ -144,149 +243,33 @@ export async function sendConversationTurn(
                     pendingText
                         .slice(
                             0,
-                            newlineIndex
+                            newlineIndex,
                         )
                         .trim();
 
                 pendingText =
                     pendingText.slice(
-                        newlineIndex + 1
+                        newlineIndex + 1,
                     );
 
                 if (!line) {
                     continue;
                 }
 
-                const event =
-                    JSON.parse(line);
-
-                if (!firstEventReceived) {
-                    firstEventReceived = true;
-
-                    logLatency(
-                        "first_stream_event",
-                        {
-                            elapsed_ms:
-                                Math.round(
-                                    performance.now()
-                                    -
-                                    requestStartedAt
-                                ),
-                            type:
-                                event.type,
-                        },
-                    );
-                }
-
-                if (
-                    event.type ===
-                    "transcript"
-                ) {
-                    transcriptEl.textContent =
-                        `You: ${event.text}`;
-
-                    continue;
-                }
-
-                if (
-                    event.type ===
-                    "audio"
-                ) {
-                    if (
-                        !firstAudioEventReceived
-                    ) {
-                        firstAudioEventReceived =
-                            true;
-
-                        logLatency(
-                            "first_audio_chunk_received",
-                            {
-                                elapsed_ms:
-                                    Math.round(
-                                        performance.now()
-                                        -
-                                        requestStartedAt
-                                    ),
-                                chunk_index:
-                                    event.index,
-                                backend:
-                                    event.timings,
-                            },
-                        );
-                    }
-
-                    setUiState(
-                        "responding"
-                    );
-
-                    enqueueBaileyAudio(
-                        event.audio_base64,
-                        event.audio_mime_type,
-                        event.index,
-                    );
-
-                    continue;
-                }
-
-                if (
-                    event.type ===
-                    "complete"
-                ) {
-                    streamCompleted = true;
-
-                    assistantEl.textContent =
-                        `Bailey: ${event.response_text}`;
-
-                    console.table(
-                        event.timings
-                    );
-
-                    logLatency(
-                        "backend_stream_complete",
-                        {
-                            request_id:
-                                event.request_id,
-                            backend:
-                                event.timings,
-                            browser_elapsed_ms:
-                                Math.round(
-                                    performance.now()
-                                    -
-                                    requestStartedAt
-                                ),
-                        },
-                    );
-
-                    markPlaybackStreamComplete();
-
-                    continue;
-                }
-
-                if (
-                    event.type ===
-                    "error"
-                ) {
-                    throw new Error(
-                        event.message ||
-                        "Bailey turn failed"
-                    );
-                }
+                handleEvent(
+                    JSON.parse(line),
+                );
             }
         }
 
-        if (pendingText.trim()) {
-            const event =
-                JSON.parse(
-                    pendingText.trim()
-                );
+        pendingText += decoder.decode();
 
-            if (
-                event.type === "error"
-            ) {
-                throw new Error(
-                    event.message
-                );
-            }
+        if (pendingText.trim()) {
+            handleEvent(
+                JSON.parse(
+                    pendingText.trim(),
+                ),
+            );
         }
 
         if (!streamCompleted) {
@@ -298,6 +281,10 @@ export async function sendConversationTurn(
         await playbackPromise;
 
     } catch (error) {
+        if (controller.signal.aborted) {
+            return;
+        }
+
         console.error(
             "Bailey turn failed:",
             error,
@@ -319,12 +306,23 @@ export async function sendConversationTurn(
             "error",
             error.message,
         );
+
+    } finally {
+        if (activeTurnController === controller) {
+            activeTurnController = null;
+        }
     }
 }
 
-
 export async function resetConversation() {
     try {
+        if (activeTurnController) {
+            activeTurnController.abort();
+            activeTurnController = null;
+        }
+
+        cancelBaileyPlayback();
+
         if (state.sessionId) {
             await fetch(
                 `/bailey/session/${state.sessionId}`,
