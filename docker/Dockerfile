@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel
 
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
@@ -18,8 +18,10 @@ RUN apt-get update && \
 # Install BaileyAI dependencies.
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir \
-    -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Validate installed dependencies.
+RUN pip check
 
 # Verify the core PyTorch/CUDA runtime.
 RUN python -c "\
@@ -28,10 +30,11 @@ print('torch:', torch.__version__); \
 print('torchaudio:', torchaudio.__version__); \
 print('transformers:', transformers.__version__); \
 print('torch cuda:', torch.version.cuda); \
+print('supported architectures:', torch.cuda.get_arch_list()); \
 print('CUDA_HOME:', os.environ.get('CUDA_HOME')); \
 print('cuda available during build:', torch.cuda.is_available())"
 
-# Verify the CUDA compiler included by the development image.
+# Verify CUDA compiler.
 RUN nvcc --version
 
 # Copy BaileyAI into the image.
