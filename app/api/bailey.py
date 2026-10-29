@@ -5,6 +5,7 @@ import logging
 import queue
 import time
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -35,6 +36,11 @@ def elapsed_ms(started_at: float) -> int:
         (time.perf_counter() - started_at)
         * 1000
     )
+
+
+def utc_timestamp() -> str:
+    """UTC wall-clock timestamp for correlating browser and server events."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def stream_event(payload: dict) -> str:
@@ -134,6 +140,8 @@ async def bailey_turn(
     """
 
     request_id = uuid.uuid4().hex[:8]
+    request_received_at = time.perf_counter()
+    request_received_utc = utc_timestamp()
 
     if not model_manager.loaded:
         raise HTTPException(
@@ -177,11 +185,11 @@ async def bailey_turn(
         )
 
     logger.info(
-        "TURN started request=%s session=%s "
-        "audio_bytes=%s",
+        "TURN RECEIVED request=%s at_utc=%s audio_bytes=%s upload_read_ms=%s",
         request_id,
-        session_id,
+        request_received_utc,
         len(audio_bytes),
+        elapsed_ms(request_received_at),
     )
 
     async def generate_stream():
@@ -189,9 +197,13 @@ async def bailey_turn(
             time.perf_counter()
         )
 
-        timings = {}
+        timings = {
+            "request_received_utc": request_received_utc,
+            "upload_read_ms": elapsed_ms(request_received_at),
+        }
 
         async with session.lock:
+            timings["session_lock_wait_ms"] = elapsed_ms(total_started_at)
             llm_task = None
 
             try:
@@ -199,9 +211,9 @@ async def bailey_turn(
                 # STT
                 # ----------------------------------
 
-                stt_started_at = (
-                    time.perf_counter()
-                )
+                stt_started_at = time.perf_counter()
+                timings["stt_started_utc"] = utc_timestamp()
+                logger.info("STT START request=%s at_utc=%s", request_id, timings["stt_started_utc"])
 
                 transcript = (
                     await model_manager.stt
@@ -217,12 +229,10 @@ async def bailey_turn(
                     )
                 )
 
+                timings["stt_completed_utc"] = utc_timestamp()
                 logger.info(
-                    "TURN stt_complete request=%s "
-                    "elapsed_ms=%s transcript=%r",
-                    request_id,
-                    timings["stt_ms"],
-                    transcript,
+                    "STT COMPLETE request=%s at_utc=%s duration_ms=%s",
+                    request_id, timings["stt_completed_utc"], timings["stt_ms"],
                 )
 
                 yield stream_event({
@@ -258,9 +268,9 @@ async def bailey_turn(
                 llm_error = None
                 first_chunk_seen = False
 
-                llm_started_at = (
-                    time.perf_counter()
-                )
+                llm_started_at = time.perf_counter()
+                timings["llm_started_utc"] = utc_timestamp()
+                logger.info("LLM START request=%s at_utc=%s", request_id, timings["llm_started_utc"])
 
                 # ----------------------------------
                 # Qwen producer
@@ -290,14 +300,12 @@ async def bailey_turn(
                                     llm_started_at
                                 )
 
+                                timings["llm_first_chunk_utc"] = utc_timestamp()
                                 logger.info(
-                                    "TURN llm_first_chunk "
-                                    "request=%s "
-                                    "elapsed_ms=%s",
+                                    "LLM FIRST CHUNK request=%s at_utc=%s duration_ms=%s",
                                     request_id,
-                                    timings[
-                                        "llm_first_chunk_ms"
-                                    ],
+                                    timings["llm_first_chunk_utc"],
+                                    timings["llm_first_chunk_ms"],
                                 )
 
                             llm_chunks.append(
@@ -337,18 +345,12 @@ async def bailey_turn(
                 # ONE continuous CosyVoice inference
                 # ----------------------------------
 
-                tts_started_at = (
-                    time.perf_counter()
-                )
+                tts_started_at = time.perf_counter()
+                timings["tts_started_utc"] = utc_timestamp()
+                logger.info("TTS STREAM START request=%s at_utc=%s", request_id, timings["tts_started_utc"])
 
                 first_audio_ready = False
                 audio_chunk_index = 0
-
-                logger.info(
-                    "TURN bistream_started "
-                    "request=%s",
-                    request_id,
-                )
 
                 async for audio_response in (
                     model_manager.tts
@@ -373,32 +375,15 @@ async def bailey_turn(
                             tts_started_at
                         )
 
+                        timings["first_audio_ready_utc"] = utc_timestamp()
                         logger.info(
-                            "TURN first_audio_ready "
-                            "request=%s "
-                            "elapsed_ms=%s "
-                            "tts_ms=%s",
+                            "FIRST AUDIO READY request=%s at_utc=%s "
+                            "tts_stream_ms=%s backend_ms=%s",
                             request_id,
-                            timings[
-                                "first_audio_ready_ms"
-                            ],
-                            timings[
-                                "tts_first_audio_ms"
-                            ],
+                            timings["first_audio_ready_utc"],
+                            timings["tts_first_audio_ms"],
+                            timings["first_audio_ready_ms"],
                         )
-
-                    logger.info(
-                        "TURN audio_chunk_ready "
-                        "request=%s chunk=%s "
-                        "elapsed_ms=%s "
-                        "audio_bytes=%s",
-                        request_id,
-                        audio_chunk_index,
-                        elapsed_ms(
-                            tts_started_at
-                        ),
-                        len(audio_response),
-                    )
 
                     yield stream_event({
                         "type": "audio",
@@ -471,40 +456,25 @@ async def bailey_turn(
                     total_started_at
                 )
 
+                timings["backend_completed_utc"] = utc_timestamp()
                 logger.info(
-                    "TURN complete request=%s "
-                    "session=%s turn=%s "
-                    "stt_ms=%s "
-                    "llm_first_chunk_ms=%s "
-                    "llm_total_ms=%s "
-                    "tts_first_audio_ms=%s "
-                    "tts_total_ms=%s "
-                    "first_audio_ready_ms=%s "
-                    "backend_total_ms=%s",
+                    "TURN COMPLETE request=%s at_utc=%s turn=%s "
+                    "stt_ms=%s llm_first_chunk_ms=%s llm_total_ms=%s "
+                    "tts_stream_first_audio_ms=%s tts_stream_total_ms=%s "
+                    "first_audio_ready_ms=%s backend_total_ms=%s "
+                    "upload_read_ms=%s session_lock_wait_ms=%s",
                     request_id,
-                    session.session_id,
+                    timings["backend_completed_utc"],
                     session.turn_count,
-                    timings.get(
-                        "stt_ms"
-                    ),
-                    timings.get(
-                        "llm_first_chunk_ms"
-                    ),
-                    timings.get(
-                        "llm_total_ms"
-                    ),
-                    timings.get(
-                        "tts_first_audio_ms"
-                    ),
-                    timings.get(
-                        "tts_total_ms"
-                    ),
-                    timings.get(
-                        "first_audio_ready_ms"
-                    ),
-                    timings[
-                        "backend_stream_complete_ms"
-                    ],
+                    timings.get("stt_ms"),
+                    timings.get("llm_first_chunk_ms"),
+                    timings.get("llm_total_ms"),
+                    timings.get("tts_first_audio_ms"),
+                    timings.get("tts_total_ms"),
+                    timings.get("first_audio_ready_ms"),
+                    timings["backend_stream_complete_ms"],
+                    timings["upload_read_ms"],
+                    timings["session_lock_wait_ms"],
                 )
 
                 yield stream_event({
