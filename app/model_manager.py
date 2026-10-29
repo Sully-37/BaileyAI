@@ -10,9 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class ModelManager:
-    """
-    Centralized GPU runtime manager.
-    """
+    """Centralized inference runtime manager."""
 
     def __init__(self):
         self.stt = STTService()
@@ -27,10 +25,7 @@ class ModelManager:
         self._load_lock = asyncio.Lock()
 
     async def start_loading(self):
-        """
-        Starts model loading without holding the HTTP request open.
-        """
-
+        """Start loading and warm-up without holding the HTTP request open."""
         async with self._load_lock:
             if self.loaded:
                 logger.info("MODEL_LOAD skipped reason=already_loaded")
@@ -42,93 +37,57 @@ class ModelManager:
 
             self.loading = True
             self.last_error = None
-
             logger.info("MODEL_LOAD started")
-
-            self._load_task = asyncio.create_task(
-                self._load_all()
-            )
+            self._load_task = asyncio.create_task(self._load_all())
 
     async def _load_all(self):
-        """
-        Loads all inference runtimes into GPU VRAM.
-        """
-
+        """Load models, run real inference, then mark Bailey ready."""
         total_started_at = time.perf_counter()
 
         try:
-            await self._load_component(
-                name="stt",
-                loader=self.stt.load,
-            )
+            await self._load_component("stt", self.stt.load)
+            await self._load_component("llm", self.llm.load)
+            # TTSService.load() already performs its own synthesis warm-up.
+            await self._load_component("tts", self.tts.load)
 
-            await self._load_component(
-                name="llm",
-                loader=self.llm.load,
-            )
-
-            await self._load_component(
-                name="tts",
-                loader=self.tts.load,
-            )
+            await self._warmup_component("stt", self.stt.warmup)
+            await self._warmup_component("llm", self.llm.warmup)
 
             self.loaded = True
             self.last_error = None
 
-            total_ms = round(
-                (time.perf_counter() - total_started_at) * 1000
-            )
-
             logger.info(
                 "MODEL_LOAD complete total_ms=%s",
-                total_ms,
+                round((time.perf_counter() - total_started_at) * 1000),
             )
-
         except Exception as exc:
             self.loaded = False
             self.last_error = str(exc)
-
-            logger.exception(
-                "MODEL_LOAD failed error=%s",
-                exc,
-            )
-
+            logger.exception("MODEL_LOAD failed error=%s", exc)
         finally:
             self.loading = False
 
-    async def _load_component(
-        self,
-        name: str,
-        loader,
-    ) -> None:
-        """
-        Loads and times one inference component.
-        """
-
+    async def _load_component(self, name: str, loader) -> None:
         started_at = time.perf_counter()
-
-        logger.info(
-            "MODEL_LOAD component=%s status=starting",
-            name,
-        )
-
+        logger.info("MODEL_LOAD component=%s status=starting", name)
         await loader()
-
-        elapsed_ms = round(
-            (time.perf_counter() - started_at) * 1000
-        )
-
         logger.info(
             "MODEL_LOAD component=%s status=complete elapsed_ms=%s",
             name,
-            elapsed_ms,
+            round((time.perf_counter() - started_at) * 1000),
+        )
+
+    async def _warmup_component(self, name: str, warmer) -> None:
+        started_at = time.perf_counter()
+        logger.info("MODEL_WARMUP component=%s status=starting", name)
+        await warmer()
+        logger.info(
+            "MODEL_WARMUP component=%s status=complete elapsed_ms=%s",
+            name,
+            round((time.perf_counter() - started_at) * 1000),
         )
 
     def status(self):
-        """
-        Returns the current model-loading state.
-        """
-
         return {
             "loaded": self.loaded,
             "loading": self.loading,
