@@ -251,6 +251,15 @@ async def bailey_turn(
                 # ----------------------------------
 
                 llm_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are Bailey, a concise conversational voice assistant. "
+                            "Never use exclamation marks (!) in any response. "
+                            "Use calm, natural language suitable for text-to-speech. "
+                            "Avoid exaggerated emphasis."
+                        ),
+                    },
                     *session.messages,
                     {
                         "role": "user",
